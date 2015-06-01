@@ -1,0 +1,94 @@
+
+
+import org.apache.spark.mllib.clustering._
+val kmeans = new KMeans()
+val model = kmeans.run(data)
+model.clusterCenters.foreach(println)
+
+val clusterLabelCount = labelsAndData.map { case (label,datum) =>
+val cluster = model.predict(datum)
+(cluster,label)
+}.countByValue
+
+def distance(a: Vector, b: Vector) =
+math.sqrt(a.toArray.zip(b.toArray).
+map(p => p._1 - p._2).map(d => d * d).sum)
+
+def distToCentroid(datum: Vector, model: KMeansModel) = {
+val cluster = model.predict(datum)
+val centroid = model.clusterCenters(cluster)
+distance(centroid, datum)
+}
+
+import org.apache.spark.rdd._
+
+def clusteringScore(data: RDD[Vector], k: Int) = {
+val kmeans = new KMeans()
+kmeans.setK(k)
+val model = kmeans.run(data)
+data.map(datum => distToCentroid(datum, model)).mean()
+}
+
+
+(30 to 100 by 10).map(k => (k, clusteringScore(data, k))).
+toList.foreach(println)
+
+
+val dataAsArray = data.map(_.toArray)
+
+val numCols = dataAsArray.first().length
+
+val n = dataAsArray.count()
+
+val sums = dataAsArray.reduce(
+(a,b) => a.zip(b).map(t => t._1 + t._2))
+
+val sumSquares = dataAsArray.fold(
+  new Array[Double](numCols)
+  )(
+    (a,b) => a.zip(b).map(t => t._1 + t._2 * t._2)
+  )
+
+val stdevs = sumSquares.zip(sums).map {
+  case(sumSq,sum) => math.sqrt(n*sumSq - sum*sum)/n
+}
+
+val means = sums.map(_ / n)
+
+def normalize(datum: Vector) = {
+  val normalizedArray = (datum.toArray, means, stdevs).zipped.map(
+    (value, mean, stdev) =>
+    if (stdev <= 0) (value - mean) else (value - mean) / stdev
+  )
+  Vectors.dense(normalizedArray)
+}
+
+val normalizedData = data.map(normalize)
+(60 to 120 by 10).map(k =>
+(k, clusteringScore(normalizedData, k))).toList.foreach(println)
+
+
+def entropy(counts: Iterable[Int]) = {
+  val values = counts.filter(_ > 0)
+  val n: Double = values.sum
+  values.map { v =>
+  val p = v / n
+  -p * math.log(p)
+  }.sum
+}
+
+def clusteringScore(normalizedLabelsAndData: RDD[(String,Vector)], k: Int) = {
+  val kmeans = new KMeans()
+  kmeans.setK(k)
+  val model = kmeans.run(normalizedLabelsAndData.values)
+  val labelsAndClusters = normalizedLabelsAndData.mapValues(model.predict)
+  val clustersAndLabels = labelsAndClusters.map(_.swap)
+  val labelsInCluster = clustersAndLabels.groupByKey().values
+  val labelCounts = labelsInCluster.map(
+    _.groupBy(l => l).map(_._2.size))
+  val n = normalizedLabelsAndData.count()
+  labelCounts.map(m => m.sum * entropy(m)).sum / n
+}
+
+(80 to 160 by 10).map(k =>
+(k, clusteringScore(normalizedData, k))).toList.foreach(println)
