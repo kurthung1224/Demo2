@@ -1,35 +1,28 @@
 bin/spark-shell --jars "/tmp/kdd/spark-liblinear-1.95.jar"
 
 
-
+import org.apache.spark.rdd.RDD
 import tw.edu.ntu.csie.liblinear._
 
 val data = Utils.loadLibSVMData(sc, "hdfs://master01:9000/tmp/part-00002")
 
 val model = SparkLiblinear.train(data, "-s 0 -c 1.0")
 
-val labelAndPreds = data.map { point =>
-
-  val prediction = model.predict(point)
- 
-  //target    prob.y       
-  println(point.y)
-  (point.y, prediction)
-    
+def PredictAndRecall(dataPoint:RDD[DataPoint] ,trainedModel: LiblinearModel, labelsNum:Double): (Double, Double) = { 
+  val tp = dataPoint.filter{point => (point.y == labelsNum) && (point.y == trainedModel.predict(point))}.count.toDouble
+  val fp = dataPoint.filter{point => (point.y == labelsNum) && (point.y != trainedModel.predict(point))}.count.toDouble
+  val tn = dataPoint.filter{point => (point.y != labelsNum) && (point.y == trainedModel.predict(point))}.count.toDouble
+  val fn = dataPoint.filter{point => (point.y != labelsNum) && (point.y != trainedModel.predict(point))}.count.toDouble
+  val pos_prec = tp / (tp+fp)
+  val pos_rec  = tp / (tp+fn)
+  (pos_prec, pos_rec)
 }
 
+//Log result
+val x = new Array[(Double, Double)](model.label.size)
+for(i <- 0 until model.label.size)
+  x(i) = PredictAndRecall(data, model , model.label(i))
 
-val accuracy = labelAndPreds.filter(r => r._1 == r._2).count.toDouble / data.count
-
-val tp = labelAndPreds.filter{r => (r._2!=0.0) && (r._1 == r._2)}.count.toDouble
-val fn = labelAndPreds.filter{r => (r._2!=0.0) && (r._1 != r._2)}.count.toDouble
-val tn = labelAndPreds.filter{r => (r._2==0.0) && (r._1 == r._2)}.count.toDouble
-val fn = labelAndPreds.filter{r => (r._2==0.0) && (r._1 != r._2)}.count.toDouble
-
-val acc = (tp+tn)/(tp+fp+tn+fn)
-val pos_prec = tp / (tp+fp)
-val pos_rec  = tp / (tp+fn)
-val neg_prec = tn / (tn+fn)
-val neg_rec  = tn / (tn+fp)
-
-println("Accuracy  = " + accuracy + "\nPrecision = " + pos_prec + "\nRecall    = pos_rec")
+//Print result
+for(i <- 0 until model.label.size)
+  println(f"Label " + model.label(i) + " = " + x(i))
